@@ -1,0 +1,18 @@
+{
+    "hit": {
+        "password": "$2y$10$W.PmqQk\/72N4GVqAP62IMePRSTBUrKnmfqMQFbxNaWYwo98zgMhYG",
+        "role": "Admin"
+    },
+    "aaa": {
+        "password": "$2y$10$yZZKR5iPRKqJOEUNCsfI0.EiXJ.dgFccFKoV5eyKgvyIWQ8aSYCUu",
+        "role": "MP"
+    },
+    "bbb": {
+        "password": "$2y$10$HI9exqbdI2PvURF6qR5mIe0HrXBU6Yoj\/B7sjRGgC59UPzVAfEJAq",
+        "role": "Reviewer"
+    },
+    "user": {
+        "password": "$2y$10$SYOs0x0xttTvlaapFrx\/w.bVUq94uA6uQ3QK7yVey0w1qrKRK3FJe",
+        "role": "Reviewer"
+    }
+}
