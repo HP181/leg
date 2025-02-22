@@ -68,3 +68,7 @@ CREATE TABLE amendments (
 -- CREATE INDEX idx_bills_author ON bills(author);
 -- CREATE INDEX idx_amendments_bill ON amendments(bill_id);
 -- CREATE INDEX idx_votes_bill ON votes(bill_id);
+
+
+
+-- ALTER TABLE `bills` CHANGE `created_at` `createdAt` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP, CHANGE `review_completed_at` `reviewCompletedAt` DATETIME NULL DEFAULT NULL, CHANGE `reviewed_by` `reviewedBy` VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci NULL DEFAULT NULL, CHANGE `voting_finalized_at` `votingFinalizedAt` DATETIME NULL DEFAULT NULL;

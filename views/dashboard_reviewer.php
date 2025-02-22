@@ -3,6 +3,9 @@ session_start();
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
+require_once "../config.php";
+require_once "../controllers/BillController.php";
+require_once "../controllers/AmendmentController.php";
 
 // Ensure user is logged in as Reviewer
 if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'Reviewer') {
@@ -10,31 +13,33 @@ if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'Reviewer') {
     exit();
 }
 
-require_once "../repositories/BillRepository.php";
-require_once "../repositories/AmendmentRepository.php";
-
-// Initialize repositories
-$billRepository = new BillRepository();
-$amendmentRepository = new AmendmentRepository();
+// Initialize controllers
+$billController = new BillController();
+$amendmentController = new AmendmentController();
 
 // Get bills that are Under Review
-$bills = $billRepository->getBillsByStatus('Under Review');
+try {
+    $bills = $billController->getBillsByStatus('Under Review');
+} catch (Exception $e) {
+    $_SESSION['error'] = "Error fetching bills: " . $e->getMessage();
+    $bills = [];
+}
 
 // Handle Complete Review action
 // Handle Complete Review action
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_review'])) {
-    $billId = $_POST['bill_id'];
     try {
-        $billRepository->updateBill($billId, [
-            'status' => 'Review Complete',
-            'review_completed_at' => date('Y-m-d H:i:s'),
-            'reviewed_by' => $_SESSION['user']['username']
-        ]);
+        $billId = $_POST['bill_id'] ?? '';
+        if (empty($billId)) {
+            throw new Exception("Bill ID is required");
+        }
+
+        $billController->completeReview($billId);
+        
         header("Location: dashboard_reviewer.php");
         exit();
     } catch (Exception $e) {
-        error_log("Error completing review: " . $e->getMessage());
-        $error = "Error completing review. Please try again.";
+        $_SESSION['error'] = $e->getMessage();
     }
 }
 ?>
@@ -202,6 +207,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_review'])) {
     <p>Your role: <?php echo htmlspecialchars($_SESSION['user']['role']); ?></p>
     <a href="logout.php">Logout</a>
 
+    <?php if (isset($_SESSION['error'])): ?>
+        <div class="error-message">
+            <?php 
+            echo htmlspecialchars($_SESSION['error']);
+            unset($_SESSION['error']);
+            ?>
+        </div>
+    <?php endif; ?>
+
     <h3>Bills Under Review</h3>
     <table>
         <thead>
@@ -220,49 +234,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['complete_review'])) {
                     <td colspan="6" class="no-bills">No bills currently under review.</td>
                 </tr>
             <?php else: ?>
-                <?php foreach ($bills as $billId => $bill): ?>
+                <?php foreach ($bills as $bill): ?>
                     <tr>
-                        <td><?php echo htmlspecialchars($bill['title']); ?></td>
-                        <td><?php echo htmlspecialchars($bill['description']); ?></td>
-                        <td><?php echo htmlspecialchars($bill['author']); ?></td>
+                        <td><?php echo htmlspecialchars($bill->getTitle()); ?></td>
+                        <td><?php echo htmlspecialchars($bill->getDescription()); ?></td>
+                        <td><?php echo htmlspecialchars($bill->getAuthor()); ?></td>
                         <td>
                             <span class="status-badge status-under-review">
-                                <?php echo htmlspecialchars($bill['status']); ?>
+                                <?php echo htmlspecialchars($bill->getStatus()); ?>
                             </span>
                         </td>
                         <td>
-    <?php
-    try {
-        $amendments = $amendmentRepository->getAmendmentsByBillId($bill['id']);
-        if (!empty($amendments)): ?>
-            <ul class="amendments-list">
-                <?php foreach ($amendments as $amendment): ?>
-                    <li>
-                        <strong>Amendment by <?php echo htmlspecialchars($amendment['reviewer'] ?? 'Unknown'); ?></strong>
-                        <p><?php echo htmlspecialchars($amendment['amendment_text'] ?? 'No amendment text'); ?></p>
-                        <em>Comments: <?php echo htmlspecialchars($amendment['comments'] ?? 'No comments'); ?></em>
-                        <?php if (isset($amendment['created_at'])): ?>
-                            <small>Created: <?php echo date('Y-m-d H:i', strtotime($amendment['created_at'])); ?></small>
-                        <?php endif; ?>
-                    </li>
-                <?php endforeach; ?>
-            </ul>
-        <?php else: ?>
-            <p>No amendments yet</p>
-        <?php endif;
-    } catch (Exception $e) {
-        error_log("Error displaying amendments: " . $e->getMessage());
-        echo "<p>Error loading amendments</p>";
-    }
-    ?>
-</td>
+                            <?php
+                            try {
+                                $amendments = $amendmentController->getByBillId($bill->getId());
+                                if (!empty($amendments)): ?>
+                                    <ul class="amendments-list">
+                                        <?php foreach ($amendments as $amendment): ?>
+                                            <li>
+                                                <strong>Amendment by <?php echo htmlspecialchars($amendment->getReviewer()); ?></strong>
+                                                <p><?php echo htmlspecialchars($amendment->getAmendmentText()); ?></p>
+                                                <em>Comments: <?php echo htmlspecialchars($amendment->getComments()); ?></em>
+                                                <small>Created: <?php echo date('Y-m-d H:i', strtotime($amendment->getCreatedAt())); ?></small>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p>No amendments yet</p>
+                                <?php endif;
+                            } catch (Exception $e) {
+                                error_log("Error displaying amendments: " . $e->getMessage());
+                                echo "<p>Error loading amendments</p>";
+                            }
+                            ?>
+                        </td>
                         <td>
-                            <a href="suggest_amendment.php?bill_id=<?php echo $bill['id']; ?>" 
+                            <a href="suggest_amendment.php?bill_id=<?php echo htmlspecialchars($bill->getId()); ?>" 
                                class="action-button suggest-amendment">Suggest Amendment</a>
-                            
 
                             <form method="post" style="display: inline;">
-                                <input type="hidden" name="bill_id" value="<?php echo htmlspecialchars($bill['id']); ?>">
+                                <input type="hidden" name="bill_id" value="<?php echo htmlspecialchars($bill->getId()); ?>">
                                 <button type="submit" name="complete_review" 
                                         class="action-button complete-review"
                                         onclick="return confirm('Are you sure you want to complete the review for this bill?');">

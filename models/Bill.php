@@ -1,23 +1,3 @@
-<!-- require_once "Repository.php";
-
-class Bill {
-    private $repo;
-
-    public function __construct() {
-        $this->repo = new Repository("bills.json");
-    }
-
-    public function createBill($title, $description, $author) {
-        $bills = $this->repo->getAll();
-        $bills[] = ["title" => $title, "description" => $description, "author" => $author, "status" => "Draft"];
-        $this->repo->saveAll($bills);
-    }
-
-    public function getAllBills() {
-        return $this->repo->getAll();
-    }
-} -->
-
 <?php
 
 class Bill {
@@ -40,9 +20,9 @@ class Bill {
         ?string $draft,
         string $status,
         string $createdAt,
-        ?string $reviewCompletedAt,
-        ?string $reviewedBy,
-        ?string $votingFinalizedAt
+        ?string $reviewCompletedAt = null,
+        ?string $reviewedBy = null,
+        ?string $votingFinalizedAt = null
     ) {
         $this->id = $id;
         $this->title = $title;
@@ -130,20 +110,62 @@ class Bill {
         $this->votingFinalizedAt = $votingFinalizedAt;
     }
 
-    // Convert Bill object to array (for database operations)
-    public function toArray(): array {
-        return [
-            'id'                  => $this->id,
-            'title'               => $this->title,
-            'description'         => $this->description,
-            'author'              => $this->author,
-            'draft'               => $this->draft,
-            'status'              => $this->status,
-            'created_at'          => $this->createdAt,
-            'review_completed_at' => $this->reviewCompletedAt,
-            'reviewed_by'         => $this->reviewedBy,
-            'voting_finalized_at' => $this->votingFinalizedAt
-        ];
+
+
+
+    public function canStartVoting(): bool {
+        return $this->status === 'Review Complete';
+    }
+
+    public function canBeEdited(): bool {
+        return in_array($this->status, ['Draft', 'Under Review']);
+    }
+
+    public function isVotingStarted(): bool {
+        return $this->status === 'Voting Started';
+    }
+
+    public function calculateVotingResult(array $voteCounts): string {
+        $validVotes = $voteCounts['For'] + $voteCounts['Against'];
+        if ($validVotes === 0) return $this->status;
+        
+        $forPercentage = ($voteCounts['For'] / $validVotes) * 100;
+        return $forPercentage > 50 ? 'Passed' : 'Rejected';
+    }
+
+    // Validation Methods
+    public function validate(): array {
+        $errors = [];
+        
+        if (empty($this->title)) {
+            $errors[] = "Title is required";
+        }
+        
+        if (empty($this->author)) {
+            $errors[] = "Author is required";
+        }
+        
+        if (empty($this->draft)) {
+            $errors[] = "Draft content is required";
+        }
+        
+        return $errors;
+    }
+
+  // Factory method to create from array
+    public static function fromArray(array $data): self {
+        return new self(
+            $data['id'],
+            $data['title'],
+            $data['description'] ?? null,
+            $data['author'] ?? null,
+            $data['draft'] ?? null,
+            $data['status'],
+            $data['created_at'],
+            $data['review_completed_at'] ?? null,
+            $data['reviewed_by'] ?? null,
+            $data['voting_finalized_at'] ?? null
+        );
     }
 }
 

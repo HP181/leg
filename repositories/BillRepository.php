@@ -1,6 +1,8 @@
 <?php
+// repositories/BillRepository.php
 
-require_once __DIR__ . "/../config.php"; 
+require_once __DIR__ . "/../config.php";
+require_once __DIR__ . "/../models/Bill.php";
 
 class BillRepository {
     private PDO $db;
@@ -9,201 +11,210 @@ class BillRepository {
         $this->db = Database::getInstance();
     }
 
-    public function createBill(array $billData): void {
+    public function createBill(Bill $bill): void {
         $this->db->beginTransaction();
         try {
             $stmt = $this->db->prepare("
-                INSERT INTO bills (id, title, description, author, draft, status)
-                VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO bills (
+                    id, title, description, author, draft, status, 
+                    created_at, review_completed_at, reviewed_by, voting_finalized_at
+                ) VALUES (
+                    ?, ?, ?, ?, ?, ?, 
+                    CURRENT_TIMESTAMP, ?, ?, ?
+                )
             ");
             
-            $billId = uniqid('bill_', true);
             $stmt->execute([
-                $billId,
-                $billData['title'],
-                $billData['description'],
-                $billData['author'],
-                $billData['draft'],
-                $billData['status']
+                $bill->getId(),
+                $bill->getTitle(),
+                $bill->getDescription(),
+                $bill->getAuthor(),
+                $bill->getDraft(),
+                $bill->getStatus(),
+                $bill->getReviewCompletedAt(),
+                $bill->getReviewedBy(),
+                $bill->getVotingFinalizedAt()
             ]);
 
             $this->db->commit();
         } catch (Exception $e) {
             $this->db->rollBack();
-            error_log("Error creating bill: " . $e->getMessage());
-            throw $e;
+            throw new Exception("Error creating bill: " . $e->getMessage());
         }
     }
 
-    public function updateBill(string $billId, array $updatedData): void {
+    public function updateBill(Bill $bill): void {
         $this->db->beginTransaction();
         try {
-            // First store the current version in history
-            $stmt = $this->db->prepare("
-                INSERT INTO bill_history (bill_id, title, description, draft, status)
-                SELECT id, title, description, draft, status FROM bills WHERE id = ?
-            ");
-            $stmt->execute([$billId]);
-
-            // Then update the bill
-            $updateFields = [];
-            $params = [];
-            foreach ($updatedData as $key => $value) {
-                if ($value !== null) {  // Only include non-null values
-                    $updateFields[] = "$key = ?";
-                    $params[] = $value;
-                }
-            }
-            $params[] = $billId;
-
             $stmt = $this->db->prepare("
                 UPDATE bills 
-                SET " . implode(", ", $updateFields) . "
+                SET title = ?,
+                    description = ?,
+                    author = ?,
+                    draft = ?,
+                    status = ?,
+                    review_completed_at = ?,
+                    reviewed_by = ?,
+                    voting_finalized_at = ?
                 WHERE id = ?
             ");
             
-            $stmt->execute($params);
-            
-            if ($stmt->rowCount() === 0) {
-                // If no rows were updated, exit without error
-                return;
-            }
-
-            $this->db->commit();
-        } catch (Exception $e) {
-            $this->db->rollBack();
-            error_log("Error updating bill: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    public function getAllBills(): array {
-        $stmt = $this->db->query("SELECT * FROM bills");
-        return $stmt->fetchAll();
-    }
-
-    public function getBillById(string $billId): ?array {
-        $stmt = $this->db->prepare("SELECT * FROM bills WHERE id = ?");
-        $stmt->execute([$billId]);
-        return $stmt->fetch() ?: null;
-    }
-
-    public function startVoting(string $billId): void {
-        try {
-            error_log("Starting voting for bill: " . $billId); // Debug log
-            
-            // First verify the bill exists and has correct status
-            $bill = $this->getBillById($billId);
-            if (!$bill) {
-                throw new Exception("Bill not found");
-            }
-            
-            if ($bill['status'] !== 'Review Complete') {
-                throw new Exception("Bill must be in 'Review Complete' status to start voting");
-            }
-    
-            $this->updateBill($billId, ['status' => 'Voting Started']);
-            error_log("Successfully started voting for bill: " . $billId); // Debug log
-        } catch (Exception $e) {
-            error_log("Error in startVoting: " . $e->getMessage());
-            throw $e;
-        }
-    }
-
-    public function getVoteByUser(string $billId, string $username): ?string {
-        try {
-            $stmt = $this->db->prepare("
-                SELECT vote 
-                FROM votes 
-                WHERE bill_id = ? AND username = ?
-            ");
-            $stmt->execute([$billId, $username]);
-            return $stmt->fetchColumn() ?: null;
-        } catch (PDOException $e) {
-            error_log("Error getting user vote: " . $e->getMessage());
-            return null;
-        }
-    }
-
-    public function getBillsByStatus(string $status): array {
-        $stmt = $this->db->prepare("SELECT * FROM bills WHERE status = ?");
-        $stmt->execute([$status]);
-        return $stmt->fetchAll();
-    }
-
-    public function getBillsByAuthor(string $author): array {
-        $stmt = $this->db->prepare("SELECT * FROM bills WHERE author = ? ORDER BY created_at DESC");
-        $stmt->execute([$author]);
-        return $stmt->fetchAll();
-    }
-
-    public function isVotingStarted(string $billId): bool {
-        $stmt = $this->db->prepare("SELECT status FROM bills WHERE id = ?");
-        $stmt->execute([$billId]);
-        $result = $stmt->fetch();
-        return $result && $result['status'] === 'Voting Started';
-    }
-
-    public function finalizeBillVoting(string $billId): void {
-        $this->db->beginTransaction();
-        try {
-            // Check if bill exists and is in voting state
-            $bill = $this->getBillById($billId);
-            if (!$bill) {
-                throw new Exception("Bill not found");
-            }
-    
-            if ($bill['status'] !== 'Voting Started') {
-                throw new Exception("Bill must be in 'Voting Started' status to finalize voting");
-            }
-    
-            // Calculate results
-            $voteCounts = $this->getVoteCounts($billId);
-            $validVotes = $voteCounts['For'] + $voteCounts['Against'];
-            
-            if ($validVotes > 0) {
-                $forPercentage = ($voteCounts['For'] / $validVotes) * 100;
-                $newStatus = $forPercentage > 50 ? 'Passed' : 'Rejected';
-                
-                // Update bill status
-                $stmt = $this->db->prepare("
-                    UPDATE bills 
-                    SET status = ?, 
-                        voting_finalized_at = CURRENT_TIMESTAMP
-                    WHERE id = ?
-                ");
-                
-                $stmt->execute([$newStatus, $billId]);
-                
-                if ($stmt->rowCount() === 0) {
-                    throw new Exception("Error finalizing bill voting");
-                }
-            }
+            $stmt->execute([
+                $bill->getTitle(),
+                $bill->getDescription(),
+                $bill->getAuthor(),
+                $bill->getDraft(),
+                $bill->getStatus(),
+                $bill->getReviewCompletedAt(),
+                $bill->getReviewedBy(),
+                $bill->getVotingFinalizedAt(),
+                $bill->getId()
+            ]);
     
             $this->db->commit();
         } catch (Exception $e) {
             $this->db->rollBack();
-            error_log("Error finalizing bill voting: " . $e->getMessage());
-            throw $e;
+            throw new Exception("Error updating bill: " . $e->getMessage());
         }
     }
 
-    public function getVoteCounts(string $billId): array {
-        $stmt = $this->db->prepare("
-            SELECT vote, COUNT(*) as count
-            FROM votes
-            WHERE bill_id = ?
-            GROUP BY vote
-        ");
-        $stmt->execute([$billId]);
-        $votes = $stmt->fetchAll(PDO::FETCH_ASSOC);
-        $counts = ['For' => 0, 'Against' => 0, 'Abstain' => 0];
-        
-        foreach ($votes as $vote) {
-            $counts[$vote['vote']] = (int) $vote['count'];
+    public function findById(string $id): ?Bill {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM bills WHERE id = ?");
+            $stmt->execute([$id]);
+            $data = $stmt->fetch(PDO::FETCH_ASSOC);
+            
+            return $data ? Bill::fromArray($data) : null;
+        } catch (Exception $e) {
+            throw new Exception("Error finding bill: " . $e->getMessage());
         }
-        
-        return $counts;
     }
+
+    public function findByStatus(string $status): array {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM bills WHERE status = ? ORDER BY created_at DESC");
+            $stmt->execute([$status]);
+            $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            return array_map(fn($data) => Bill::fromArray($data), $bills);
+        } catch (Exception $e) {
+            throw new Exception("Error finding bills by status: " . $e->getMessage());
+        }
+    }
+
+
+    public function findByAuthor(string $author): array {
+        try {
+            $stmt = $this->db->prepare("SELECT * FROM bills WHERE author = ? ORDER BY created_at DESC");
+            $stmt->execute([$author]);
+            $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            return array_map(fn($data) => Bill::fromArray($data), $bills);
+        } catch (Exception $e) {
+            throw new Exception("Error finding bills by author: " . $e->getMessage());
+        }
+    }
+
+    public function findAll(): array {
+        try {
+            $stmt = $this->db->query("SELECT * FROM bills ORDER BY created_at DESC");
+            $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+            return array_map(fn($data) => Bill::fromArray($data), $bills);
+        } catch (Exception $e) {
+            throw new Exception("Error finding all bills: " . $e->getMessage());
+        }
+    }
+
+    // public function startVoting(Bill $bill): void {
+    //     try {
+    //         if (!$bill->canStartVoting()) {
+    //             throw new Exception("Bill must be in 'Review Complete' status to start voting");
+    //         }
+
+    //         $bill->setStatus('Voting Started');
+    //         $this->updateBill($bill);
+    //     } catch (Exception $e) {
+    //         throw new Exception("Error starting voting: " . $e->getMessage());
+    //     }
+    // }
+
+   
+   
+    // public function finalizeBillVoting(Bill $bill): void {
+    //     $this->db->beginTransaction();
+    //     try {
+    //         if (!$bill->isVotingStarted()) {
+    //             throw new Exception("Bill must be in 'Voting Started' status to finalize voting");
+    //         }
+
+    //         $voteCounts = $this->getVoteCounts($bill->getId());
+    //         $newStatus = $bill->calculateVotingResult($voteCounts);
+            
+    //         $bill->setStatus($newStatus);
+    //         $bill->setVotingFinalizedAt(date('Y-m-d H:i:s'));
+            
+    //         $this->updateBill($bill);
+    //         $this->db->commit();
+    //     } catch (Exception $e) {
+    //         $this->db->rollBack();
+    //         throw new Exception("Error finalizing bill voting: " . $e->getMessage());
+    //     }
+    // }
+
+   
+   
+    // public function getVoteByUser(string $billId, string $username): ?string {
+    //     try {
+    //         $stmt = $this->db->prepare("
+    //             SELECT vote 
+    //             FROM votes 
+    //             WHERE bill_id = ? AND username = ?
+    //         ");
+    //         $stmt->execute([$billId, $username]);
+    //         return $stmt->fetchColumn() ?: null;
+    //     } catch (Exception $e) {
+    //         throw new Exception("Error getting user vote: " . $e->getMessage());
+    //     }
+    // }
+
+  
+    // public function getVoteCounts(string $billId): array {
+    //     try {
+    //         $stmt = $this->db->prepare("
+    //             SELECT vote, COUNT(*) as count
+    //             FROM votes
+    //             WHERE bill_id = ?
+    //             GROUP BY vote
+    //         ");
+    //         $stmt->execute([$billId]);
+    //         $votes = $stmt->fetchAll(PDO::FETCH_ASSOC);
+            
+    //         $counts = ['For' => 0, 'Against' => 0, 'Abstain' => 0];
+    //         foreach ($votes as $vote) {
+    //             $counts[$vote['vote']] = (int)$vote['count'];
+    //         }
+            
+    //         return $counts;
+    //     } catch (Exception $e) {
+    //         throw new Exception("Error getting vote counts: " . $e->getMessage());
+    //     }
+    // }
+
+    
+    
+    // private function storeBillHistory(string $billId): void {
+    //     $stmt = $this->db->prepare("
+    //         INSERT INTO bill_history (
+    //             bill_id, title, description, draft, status,
+    //             review_completed_at, reviewed_by, voting_finalized_at
+    //         )
+    //         SELECT 
+    //             id, title, description, draft, status,
+    //             review_completed_at, reviewed_by, voting_finalized_at
+    //         FROM bills 
+    //         WHERE id = ?
+    //     ");
+    //     $stmt->execute([$billId]);
+    // }
 }
-?>

@@ -7,16 +7,16 @@ if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'Reviewer') {
     exit();
 }
 
-require_once "../repositories/AmendmentRepository.php"; // Amendment repository to save amendments
-require_once "../repositories/BillRepository.php"; // To fetch the specific bill
+require_once "../controllers/AmendmentController.php"; // Amendment repository to save amendments
+require_once "../controllers/BillController.php"; // To fetch the specific bill
 
 $billId = $_GET['bill_id'] ?? null;
 if (!$billId) {
     die("No Bill ID provided.");
 }
 
-$billRepository = new BillRepository();
-$bill = $billRepository->getBillById($billId); // Fetch the specific bill
+$billController = new BillController();
+$bill = $billController->getBillById($billId); // Fetch the specific bill
 
 if (!$bill) {
     die("Bill not found.");
@@ -30,8 +30,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (!empty($amendmentText) && !empty($comments)) {
         try {
             // Create a new AmendmentRepository instance and save the amendment
-            $amendmentRepository = new AmendmentRepository();
-            $amendmentRepository->addAmendment([
+            $amendmentController = new AmendmentController();
+            $amendmentController->addAmendment([
                 'bill_id' => $billId,
                 'reviewer' => $_SESSION['user']['username'],
                 'amendment_text' => $amendmentText,

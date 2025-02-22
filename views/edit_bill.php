@@ -9,30 +9,52 @@ if (!isset($_SESSION['user']) || !in_array($_SESSION['user']['role'], ['Admin', 
 }
 
 $billController = new BillController();
-$billId = $_GET['bill_id'] ?? null;
-$bill = $billId ? $billController->getBillById($billId) : null;
 
-// Check if the bill exists and if it's the MP's own bill or Admin's permission
-if (!$bill || ($_SESSION['user']['role'] === 'MP' && $bill['author'] !== $_SESSION['user']['username'])) {
-    die("Unauthorized access.");
-}
-
-// Handle form submission for editing
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $updatedData = [
-        'title' => $_POST['title'],
-        'description' => $_POST['description'],
-        'draft' => $_POST['draft']
-    ];
-    
-    $billController->updateBill($billId, $updatedData);
-
-    // Redirect to the respective dashboard
-    if ($_SESSION['user']['role'] === 'MP') {
-        header("Location: dashboard_mp.php");
-    } else {
-        header("Location: dashboard_admin.php");
+try {
+    // Get bill ID and fetch bill
+    $billId = $_GET['bill_id'] ?? '';
+    if (empty($billId)) {
+        throw new Exception("Bill ID is required");
     }
+
+    $bill = $billController->getBillById($billId);
+    if (!$bill) {
+        throw new Exception("Bill not found");
+    }
+
+    // Check authorization
+    if ($_SESSION['user']['role'] === 'MP' && $bill->getAuthor() !== $_SESSION['user']['username']) {
+        throw new Exception("Unauthorized access");
+    }
+
+    // Handle form submission for editing
+    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+        try {
+            // Update bill object with new data
+            $bill->setTitle($_POST['title']);
+            $bill->setDescription($_POST['description']);
+            $bill->setDraft($_POST['draft']);
+
+            // Validate the updates
+            $errors = $bill->validate();
+            if (!empty($errors)) {
+                throw new Exception(implode(", ", $errors));
+            }
+
+            // Update the bill
+            $billController->updateBill($bill);
+
+            // Redirect to the respective dashboard
+            $redirectPath = $_SESSION['user']['role'] === 'MP' ? 'dashboard_mp.php' : 'dashboard_admin.php';
+            header("Location: $redirectPath");
+            exit();
+        } catch (Exception $e) {
+            $_SESSION['error'] = "Error updating bill: " . $e->getMessage();
+        }
+    }
+} catch (Exception $e) {
+    $_SESSION['error'] = $e->getMessage();
+    header("Location: " . ($_SESSION['user']['role'] === 'MP' ? 'dashboard_mp.php' : 'dashboard_admin.php'));
     exit();
 }
 ?>
@@ -40,6 +62,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Edit Bill</title>
@@ -116,22 +140,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </style>
 </head>
 <body>
-
     <div class="container">
         <h2>Edit Bill</h2>
+
+        <?php if (isset($_SESSION['error'])): ?>
+            <div class="error-message">
+                <?php 
+                echo htmlspecialchars($_SESSION['error']);
+                unset($_SESSION['error']);
+                ?>
+            </div>
+        <?php endif; ?>
+
         <form method="post">
             <label for="title">Title:</label>
-            <input type="text" name="title" value="<?php echo htmlspecialchars($bill['title']); ?>" required>
+            <input type="text" 
+                   name="title" 
+                   value="<?php echo htmlspecialchars($bill->getTitle()); ?>" 
+                   required>
 
             <label for="description">Description:</label>
-            <textarea name="description" required><?php echo htmlspecialchars($bill['description']); ?></textarea>
+            <textarea name="description" required><?php echo htmlspecialchars($bill->getDescription()); ?></textarea>
 
             <label for="draft">Draft:</label>
-            <textarea name="draft" required><?php echo htmlspecialchars($bill['draft']); ?></textarea>
+            <textarea name="draft" required><?php echo htmlspecialchars($bill->getDraft()); ?></textarea>
 
             <button type="submit">Update Bill</button>
         </form>
     </div>
-
 </body>
 </html>

@@ -1,145 +1,228 @@
 <?php
-// Data Display Section
-$viewType = $_GET['view_type'] ?? 'bills';
-$filterStatus = $_GET['status'] ?? '';
-$voteType = $_GET['vote_type'] ?? '';
-$billFilter = $_GET['bill_filter'] ?? '';
+require_once "../controllers/BillController.php";
+require_once "../controllers/VoteController.php";
+require_once "../controllers/AmendmentController.php";
 
-switch ($viewType):
-    case 'bills':
-        $bills = $billRepository->getAllBills();
-        if ($filterStatus) {
-            $bills = array_filter($bills, fn($bill) => $bill['status'] === $filterStatus);
-        }
-        ?>
-        <table>
-            <thead>
-                <tr>
-                    <th>Title</th>
-                    <th>Description</th>
-                    <th>Status</th>
-                    <th>Author</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (empty($bills)): ?>
-                    <tr>
-                        <td colspan="4" style="text-align: center;">No bills found</td>
-                    </tr>
-                <?php else: ?>
-                    <?php foreach ($bills as $bill): ?>
-                        <tr>
-                            <td><?php echo htmlspecialchars($bill['title']); ?></td>
-                            <td><?php echo htmlspecialchars($bill['description']); ?></td>
-                            <td>
-                                <span class="status-badge">
-                                    <?php echo htmlspecialchars($bill['status']); ?>
-                                </span>
-                            </td>
-                            <td><?php echo htmlspecialchars($bill['author']); ?></td>
-                        </tr>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </tbody>
-        </table>
-        <?php
-        break;
+// Debug incoming parameters
+error_log("View Type: " . $viewType);
+error_log("Filter Status: " . ($filterStatus ?: 'none'));
+error_log("Vote Type: " . ($voteType ?: 'none'));
+error_log("Bill Filter: " . ($billFilter ?: 'none'));
 
-    case 'votes':
-        $votes = $voteRepository->getAllVotes();
-        // Filter votes by type if selected
-        if ($voteType) {
-            $filteredVotes = [];
-            foreach ($votes as $billId => $billVotes) {
-                foreach ($billVotes as $user => $vote) {
-                    if ($vote === $voteType) {
-                        if (!isset($filteredVotes[$billId])) {
-                            $filteredVotes[$billId] = [];
-                        }
-                        $filteredVotes[$billId][$user] = $vote;
-                    }
-                }
+// Initialize controllers with validation
+if (!isset($billController)) {
+    error_log("Creating new BillController");
+    $billController = new BillController();
+}
+if (!isset($voteController)) {
+    error_log("Creating new VoteController");
+    $voteController = new VoteController();
+}
+if (!isset($amendmentController)) {
+    error_log("Creating new AmendmentController");
+    $amendmentController = new AmendmentController();
+}
+
+try {
+    switch ($viewType):
+        case 'bills':
+            error_log("Fetching bills...");
+            $bills = [];
+            
+            if ($filterStatus) {
+                error_log("Fetching bills by status: " . $filterStatus);
+                $bills = $billController->getBillsByStatus($filterStatus);
+            }  else{
+                error_log("Fetching all bills");
+                $bills = $billController->getBillsByAuthor('%');
             }
-            $votes = $filteredVotes;
-        }
-        ?>
-        <table>
-            <thead>
-                <tr>
-                    <th>Bill Title</th>
-                    <th>User</th>
-                    <th>Vote</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (empty($votes)): ?>
+
+            error_log("Found " . count($bills) . " bills");
+            
+            if (!is_array($bills)) {
+                error_log("Warning: Bills is not an array");
+                $bills = [];
+            }
+            ?>
+            <table>
+                <thead>
                     <tr>
-                        <td colspan="3" style="text-align: center;">No votes found</td>
+                        <th>Title</th>
+                        <th>Description</th>
+                        <th>Status</th>
+                        <th>Author</th>
                     </tr>
-                <?php else: ?>
-                    <?php foreach ($votes as $billId => $billVotes): ?>
-                        <?php 
-                        $bill = $billRepository->getBillById($billId);
-                        $billTitle = $bill ? $bill['title'] : 'Unknown Bill';
-                        ?>
-                        <?php foreach ($billVotes as $user => $vote): ?>
+                </thead>
+                <tbody>
+                    <?php if (empty($bills)): ?>
+                        <tr>
+                            <td colspan="4" style="text-align: center;">No bills found</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($bills as $bill): ?>
+                            <?php
+                            if (!is_object($bill)) {
+                                error_log("Warning: Bill is not an object: " . print_r($bill, true));
+                                continue;
+                            }
+                            ?>
                             <tr>
-                                <td><?php echo htmlspecialchars($billTitle); ?></td>
-                                <td><?php echo htmlspecialchars($user); ?></td>
+                                <td><?php echo htmlspecialchars($bill->getTitle()); ?></td>
+                                <td><?php echo htmlspecialchars($bill->getDescription()); ?></td>
                                 <td>
-                                    <span class="vote-badge vote-<?php echo strtolower($vote); ?>">
-                                        <?php echo htmlspecialchars($vote); ?>
+                                    <span class="status-badge status-<?php echo strtolower($bill->getStatus()); ?>">
+                                        <?php echo htmlspecialchars($bill->getStatus()); ?>
                                     </span>
                                 </td>
+                                <td><?php echo htmlspecialchars($bill->getAuthor()); ?></td>
                             </tr>
                         <?php endforeach; ?>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </tbody>
-        </table>
-        <?php
-        break;
+                    <?php endif; ?>
+                </tbody>
+            </table>
+            <?php
+            break;
 
-    case 'amendments':
-        $amendments = $amendmentRepository->getAllAmendments();
-        // Filter amendments by bill if selected
-        if ($billFilter) {
-            $amendments = array_filter($amendments, fn($amendment) => $amendment['bill_id'] === $billFilter);
-        }
-        ?>
-        <table>
-            <thead>
-                <tr>
-                    <th>Bill Title</th>
-                    <th>Reviewer</th>
-                    <th>Amendment Text</th>
-                    <th>Comments</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php if (empty($amendments)): ?>
+        case 'votes':
+            error_log("Fetching votes...");
+            try {
+                if ($voteType) {
+                    error_log("Fetching votes by type: " . $voteType);
+                    $votes = $voteController->getVotesByType($voteType);
+                } else {
+                    error_log("Fetching all votes");
+                    $votes = $voteController->getVotes();
+                }
+
+                error_log("Found " . (is_array($votes) ? count($votes) : 'non-array') . " votes");
+                
+                if (!is_array($votes)) {
+                    error_log("Warning: Votes is not an array");
+                    $votes = [];
+                }
+            } catch (Exception $e) {
+                error_log("Error getting votes: " . $e->getMessage());
+                $votes = [];
+            }
+            ?>
+            <table>
+                <thead>
                     <tr>
-                        <td colspan="4" style="text-align: center;">No amendments found</td>
+                        <th>Bill Title</th>
+                        <th>User</th>
+                        <th>Vote</th>
+                        <th>Time</th>
                     </tr>
-                <?php else: ?>
-                    <?php foreach ($amendments as $amendment): ?>
-                        <?php 
-                        $bill = $billRepository->getBillById($amendment['bill_id']);
-                        $billTitle = $bill ? $bill['title'] : 'Unknown Bill';
-                        ?>
+                </thead>
+                <tbody>
+                    <?php if (empty($votes)): ?>
                         <tr>
-                            <td><?php echo htmlspecialchars($billTitle); ?></td>
-                            <td><?php echo htmlspecialchars($amendment['reviewer']); ?></td>
-                            <td><?php echo htmlspecialchars($amendment['amendment_text']); ?></td>
-                            <td><?php echo htmlspecialchars($amendment['comments']); ?></td>
+                            <td colspan="4" style="text-align: center;">No votes found</td>
                         </tr>
-                    <?php endforeach; ?>
-                <?php endif; ?>
-            </tbody>
-        </table>
-        <?php
-        break;
-endswitch;
+                    <?php else: ?>
+                        <?php foreach ($votes as $vote): ?>
+                            <?php
+                            if (!is_object($vote)) {
+                                error_log("Warning: Vote is not an object: " . print_r($vote, true));
+                                continue;
+                            }
+                            
+                            try {
+                                $bill = $billController->getBillById($vote->getBillId());
+                                error_log("Found bill for vote: " . ($bill ? "yes" : "no"));
+                            } catch (Exception $e) {
+                                error_log("Error getting bill for vote: " . $e->getMessage());
+                                $bill = null;
+                            }
+                            ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($bill ? $bill->getTitle() : 'Unknown Bill'); ?></td>
+                                <td><?php echo htmlspecialchars($vote->getUsername()); ?></td>
+                                <td>
+                                    <span class="vote-badge vote-<?php echo strtolower($vote->getVote()); ?>">
+                                        <?php echo htmlspecialchars($vote->getVote()); ?>
+                                    </span>
+                                </td>
+                                <td><?php echo htmlspecialchars($vote->getVotedAt()); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+            <?php
+            break;
+
+        case 'amendments':
+            error_log("Fetching amendments...");
+            try {
+                if ($billFilter) {
+                    error_log("Fetching amendments by bill ID: " . $billFilter);
+                    $amendments = $amendmentController->getByBillId($billFilter);
+                } else {
+                    error_log("Fetching all amendments");
+                    $amendments = $amendmentController->getAll();
+                }
+
+                error_log("Found " . (is_array($amendments) ? count($amendments) : 'non-array') . " amendments");
+                
+                if (!is_array($amendments)) {
+                    error_log("Warning: Amendments is not an array");
+                    $amendments = [];
+                }
+            } catch (Exception $e) {
+                error_log("Error getting amendments: " . $e->getMessage());
+                $amendments = [];
+            }
+            ?>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Bill Title</th>
+                        <th>Reviewer</th>
+                        <th>Amendment Text</th>
+                        <th>Comments</th>
+                        <th>Created At</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php if (empty($amendments)): ?>
+                        <tr>
+                            <td colspan="5" style="text-align: center;">No amendments found</td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($amendments as $amendment): ?>
+                            <?php
+                            if (!is_object($amendment)) {
+                                error_log("Warning: Amendment is not an object: " . print_r($amendment, true));
+                                continue;
+                            }
+                            
+                            try {
+                                $bill = $billController->getBillById($amendment->getBillId());
+                                error_log("Found bill for amendment: " . ($bill ? "yes" : "no"));
+                            } catch (Exception $e) {
+                                error_log("Error getting bill for amendment: " . $e->getMessage());
+                                $bill = null;
+                            }
+                            ?>
+                            <tr>
+                                <td><?php echo htmlspecialchars($bill ? $bill->getTitle() : 'Unknown Bill'); ?></td>
+                                <td><?php echo htmlspecialchars($amendment->getReviewer()); ?></td>
+                                <td><?php echo htmlspecialchars($amendment->getAmendmentText()); ?></td>
+                                <td><?php echo htmlspecialchars($amendment->getComments()); ?></td>
+                                <td><?php echo htmlspecialchars($amendment->getCreatedAt()); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                </tbody>
+            </table>
+            <?php
+            break;
+    endswitch;
+} catch (Exception $e) {
+    error_log("Major error in data display: " . $e->getMessage());
+    echo '<div class="error-message">' . htmlspecialchars($e->getMessage()) . '</div>';
+}
 ?>
 
 <style>

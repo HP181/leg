@@ -1,9 +1,8 @@
 <?php
 session_start();
 require_once "../controllers/BillController.php";
-require_once "../repositories/AmendmentRepository.php";
-require_once "../repositories/BillRepository.php";
-require_once "../repositories/VoteRepository.php";
+require_once "../controllers/AmendmentController.php";
+require_once "../controllers/VoteController.php";
 
 // Ensure that the user is logged in and has the correct role (MP)
 if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'MP') {
@@ -11,73 +10,104 @@ if (!isset($_SESSION['user']) || $_SESSION['user']['role'] !== 'MP') {
     exit();
 }
 
+// Initialize controllers
 $billController = new BillController();
-$amendmentRepository = new AmendmentRepository();
-$billRepository = new BillRepository();
-$voteRepository = new VoteRepository(); 
+$amendmentController = new AmendmentController();
+$voteController = new VoteController();
 $user = $_SESSION['user']['username'];
 
 // Handle form submission for creating a bill
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['create_bill'])) {
-    $title = trim($_POST['title']);
-    $description = trim($_POST['description']);
-    $author = $_SESSION['user']['username']; // Always use session for security
-    $draft = trim($_POST['draft']);
+    try {
+        $title = trim($_POST['title']);
+        $description = trim($_POST['description']);
+        $author = $_SESSION['user']['username'];
+        $draft = trim($_POST['draft']);
 
-    if (empty($title) || empty($description) || empty($draft)) {
-        die("All fields are required.");
+        $bill = new Bill(
+            uniqid('bill_', true),
+            $title,
+            $description,
+            $author,
+            $draft,
+            'Draft',
+            date('Y-m-d H:i:s')
+        );
+
+        $errors = $bill->validate();
+        if (!empty($errors)) {
+            throw new Exception(implode(", ", $errors));
+        }
+
+        // $billController->createBill();
+        $billController->createBill($bill);
+        header("Location: dashboard_mp.php");
+        exit();
+    } catch (Exception $e) {
+        $_SESSION['error'] = "Error creating bill: " . $e->getMessage();
     }
-
-    $billController = new BillController();
-    $billController->createBill($title, $description, $author, $draft);
-    // $billController->createBill();
 }
 
-// Handle Vote Casting by MP
 // Handle Vote Casting by MP
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['cast_vote'])) {
     try {
         $billId = $_POST['bill_id'] ?? '';
-        $vote = $_POST['vote'] ?? '';
+        $voteType = $_POST['vote'] ?? '';
         $mpUsername = $_SESSION['user']['username'];
 
-        if (empty($billId) || empty($vote)) {
+        if (empty($billId) || empty($voteType)) {
             throw new Exception("Missing required voting information");
         }
 
-        error_log("Attempting to record vote - Bill ID: $billId, User: $mpUsername, Vote: $vote"); // Debug log
-        
-        $billController->recordVote($billId, $mpUsername, $vote);
+        $vote = new Vote(
+            $billId,
+            $mpUsername,
+            $voteType,
+            date('Y-m-d H:i:s')
+        );
+
+        // $voteController->recordVote($vote);
+        $voteController->recordVote();
         header("Location: dashboard_mp.php");
         exit();
     } catch (Exception $e) {
-        error_log("Error recording vote: " . $e->getMessage());
-        echo "Error recording vote: " . $e->getMessage();
+        $_SESSION['error'] = "Error recording vote: " . $e->getMessage();
     }
 }
 
 // Handle Submit for Review
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['submit_for_review'])) {
-    $billId = $_POST['bill_id'];
-    error_log("Submit for review triggered for bill ID: " . $billId); // Debug logging
-    
     try {
-        $billController->updateBill($billId, ['status' => 'Under Review']);
+        $billId = $_POST['bill_id'];
+        $bill = $billController->getBillById($billId);
+        
+        if (!$bill) {
+            throw new Exception("Bill not found");
+        }
+
+        $bill->setStatus('Under Review');
+        $billController->updateBill($bill);
+        
         header("Location: dashboard_mp.php");
         exit();
     } catch (Exception $e) {
-        error_log("Error in submit for review: " . $e->getMessage());
-        echo "Error updating bill status: " . $e->getMessage();
+        $_SESSION['error'] = "Error submitting for review: " . $e->getMessage();
     }
 }
 
 // Load all bills created by the MP
-$bills = $billController->getBillsByAuthor($user);
+try {
+    $bills = $billController->getBillsByAuthor($user);
+} catch (Exception $e) {
+    $_SESSION['error'] = "Error loading bills: " . $e->getMessage();
+    $bills = [];
+}
 ?>
 
 <!DOCTYPE html>
 <html lang="en">
 <head>
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MP Dashboard</title>
@@ -237,145 +267,148 @@ $bills = $billController->getBillsByAuthor($user);
     </style>
 </head>
 <body>
+    <header>
+        <h2>MP Dashboard</h2>
+        <p>Welcome, <?php echo htmlspecialchars($user); ?>!</p>
+        <p>Your role: <?php echo htmlspecialchars($_SESSION['user']['role']); ?></p>
+        <a href="logout.php">Logout</a>
+    </header>
 
-<header>
-    <h2>MP Dashboard</h2>
-    <p>Welcome, <?php echo htmlspecialchars($user); ?>!</p>
-    <p>Your role: <?php echo htmlspecialchars($_SESSION['user']['role']); ?></p>
-    <a href="logout.php">Logout</a>
-</header>
+    <div class="container">
+        <?php if (isset($_SESSION['error'])): ?>
+            <div class="error-message">
+                <?php 
+                echo htmlspecialchars($_SESSION['error']);
+                unset($_SESSION['error']);
+                ?>
+            </div>
+        <?php endif; ?>
 
-<div class="container">
-    <h2>Create New Bill</h2>
-    <form method="post" action="create_bill.php">
-        <label for="title">Bill Title:</label>
-        <input type="text" name="title" id="title" required>
-        
-        <label for="description">Bill Description:</label>
-        <textarea name="description" id="description" required></textarea>
-        
-        <label for="author">Bill Author:</label>
-        <input type="text" name="author" id="author" value="<?php echo htmlspecialchars($_SESSION['user']['username']); ?>" readonly>
-        
-        <label for="draft">Initial Draft:</label>
-        <textarea name="draft" id="draft" required></textarea>
-        
-        <button type="submit" name="create_bill">Create Bill</button>
-    </form>
+        <h2>Create New Bill</h2>
+        <form method="post">
+            <label for="title">Bill Title:</label>
+            <input type="text" name="title" id="title" required>
+            
+            <label for="description">Bill Description:</label>
+            <textarea name="description" id="description" required></textarea>
+            
+            <label for="author">Bill Author:</label>
+            <input type="text" name="author" id="author" value="<?php echo htmlspecialchars($_SESSION['user']['username']); ?>" readonly>
+            
+            <label for="draft">Initial Draft:</label>
+            <textarea name="draft" id="draft" required></textarea>
+            
+            <button type="submit" name="create_bill">Create Bill</button>
+        </form>
 
-    <h2>Your Bills</h2>
+        <h2>Your Bills</h2>
 
-    <?php if (!empty($bills)): ?>
-        <div class="table">
-
-        
-        <table>
-            <tr>
-                <th>Title</th>
-                <th>Description</th>
-                <th>Status</th>
-                <th class="actions">Actions</th>
-                <th>Amendments</th>
-                <th>Voting Status & Results</th>
-                <th>Submit for Review</th>
-            </tr>
-            <?php foreach ($bills as $bill): ?>  
-    <tr>
-        <td><?php echo htmlspecialchars($bill['title']); ?></td>
-        <td><?php echo htmlspecialchars($bill['description']); ?></td>
-        <td><?php echo htmlspecialchars($bill['status']); ?></td>
-                    <td class="bill-actions">
-                        <a href="edit_bill.php?bill_id=<?php echo $bill['id']; ?>">Edit</a>
-                    </td>
-                    <td>
-                        <?php
-                        $amendments = $amendmentRepository->getAmendmentsByBillId($bill['id']);
-                        if (count($amendments) > 0): ?>
-                            <ul>
-                                <?php foreach ($amendments as $amendment): ?>
-                                    <li>
-                                        <strong>Amendment by <?php echo htmlspecialchars($amendment['reviewer']); ?>:</strong>
-                                        <p><?php echo htmlspecialchars($amendment['amendment_text']); ?></p>
-                                        <em>Comments: <?php echo htmlspecialchars($amendment['comments']); ?></em>
-                                    </li>
-                                <?php endforeach; ?>
-                            </ul>
-                        <?php else: ?>
-                            <p>No amendments yet.</p>
-                        <?php endif; ?>
-                    </td>
-                    <td>
-    <?php
-    $voteCounts = $billController->getVoteCounts($bill['id']);
-    $totalVotes = $voteCounts['For'] + $voteCounts['Against'] + $voteCounts['Abstain'];
-    
-    // Use voteRepository instead of billRepository
-    $userVote = $voteRepository->getVoteByUser($bill['id'], $_SESSION['user']['username']);
-
-    if ($bill['status'] === 'Voting Started'): ?>
-       <div class="voting-section">
-    <form method="post">
-        <input type="hidden" name="bill_id" value="<?php echo htmlspecialchars($bill['id']); ?>">
-        <label for="vote_<?php echo $bill['id']; ?>">Cast Your Vote:</label>
-        <select name="vote" id="vote_<?php echo $bill['id']; ?>" required>
-            <option value="For" <?php echo $userVote === 'For' ? 'selected' : ''; ?>>For</option>
-            <option value="Against" <?php echo $userVote === 'Against' ? 'selected' : ''; ?>>Against</option>
-            <option value="Abstain" <?php echo $userVote === 'Abstain' ? 'selected' : ''; ?>>Abstain</option>
-        </select>
-        <button type="submit" name="cast_vote">
-            <?php echo $userVote ? 'Update Vote' : 'Submit Vote'; ?>
-        </button>
-    </form>
-    <?php elseif (in_array($bill['status'], ['Passed', 'Rejected'])): ?>
-        <div class="final-results">
-            <h4>Final Results:</h4>
-            <p><strong>Status: <?php echo htmlspecialchars($bill['status']); ?></strong></p>
-            <p>Votes For: <?php echo $voteCounts['For']; ?></p>
-            <p>Votes Against: <?php echo $voteCounts['Against']; ?></p>
-            <p>Abstentions: <?php echo $voteCounts['Abstain']; ?></p>
-            <p>Total Votes: <?php echo $totalVotes; ?></p>
-           
-        </div>
-    <?php else: ?>
-        <p>Voting has not started yet.</p>
-    <?php endif; ?>
-</td>
-                    <td>
-                        <?php if ($bill['status'] === 'Draft'): ?>
-                            <form method="post">
-    <input type="hidden" name="bill_id" value="<?php echo htmlspecialchars($bill['id']); ?>">
-    <button type="submit" name="submit_for_review" class="review-button">Submit for Review</button>
-</form>
-                        <?php else: ?>
-                            <p class="status-message">
+        <?php if (!empty($bills)): ?>
+            <div class="table">
+                <table>
+                    <tr>
+                        <th>Title</th>
+                        <th>Description</th>
+                        <th>Status</th>
+                        <th class="actions">Actions</th>
+                        <th>Amendments</th>
+                        <th>Voting Status & Results</th>
+                        <th>Submit for Review</th>
+                    </tr>
+                    <?php foreach ($bills as $bill): ?>  
+                        <tr>
+                            <td><?php echo htmlspecialchars($bill->getTitle()); ?></td>
+                            <td><?php echo htmlspecialchars($bill->getDescription()); ?></td>
+                            <td><?php echo htmlspecialchars($bill->getStatus()); ?></td>
+                            <td class="bill-actions">
+                                <a href="edit_bill.php?bill_id=<?php echo htmlspecialchars($bill->getId()); ?>">Edit</a>
+                            </td>
+                            <td>
                                 <?php
-                                switch($bill['status']) {
-                                    case 'Under Review':
-                                        echo 'Currently under review';
-                                        break;
-                                    case 'Review Complete':
-                                        echo 'Review completed';
-                                        break;
-                                    case 'Voting Started':
-                                        echo 'Voting in progress';
-                                        break;
-                                    case 'Passed':
-                                    case 'Rejected':
-                                        echo 'Final status: ' . $bill['status'];
-                                        break;
-                                }
-                                ?>
-                            </p>
-                        <?php endif; ?>
-                    </td>
-                </tr>
-            <?php endforeach; ?>
-        </table>
-        </div>
-    <?php else: ?>
-        <p>You have not created any bills yet.</p>
-    <?php endif; ?>
-</div>
+                                $amendments = $amendmentController->getByBillId($bill->getId());
+                                if (!empty($amendments)): ?>
+                                    <ul>
+                                        <?php foreach ($amendments as $amendment): ?>
+                                            <li>
+                                                <strong>Amendment by <?php echo htmlspecialchars($amendment->getReviewer()); ?>:</strong>
+                                                <p><?php echo htmlspecialchars($amendment->getAmendmentText()); ?></p>
+                                                <em>Comments: <?php echo htmlspecialchars($amendment->getComments()); ?></em>
+                                            </li>
+                                        <?php endforeach; ?>
+                                    </ul>
+                                <?php else: ?>
+                                    <p>No amendments yet.</p>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php
+                                $voteCounts = $voteController->getVoteCounts($bill->getId());
+                                $totalVotes = $voteCounts['For'] + $voteCounts['Against'] + $voteCounts['Abstain'];
+                                $userVote = $voteController->getUserVote($bill->getId());
 
+                                if ($bill->getStatus() === 'Voting Started'): ?>
+                                    <div class="voting-section">
+                                        <form method="post">
+                                            <input type="hidden" name="bill_id" value="<?php echo htmlspecialchars($bill->getId()); ?>">
+                                            <label for="vote_<?php echo $bill->getId(); ?>">Cast Your Vote:</label>
+                                            <select name="vote" id="vote_<?php echo $bill->getId(); ?>" required>
+                                                <option value="For" <?php echo $userVote && $userVote->getVote() === 'For' ? 'selected' : ''; ?>>For</option>
+                                                <option value="Against" <?php echo $userVote && $userVote->getVote() === 'Against' ? 'selected' : ''; ?>>Against</option>
+                                                <option value="Abstain" <?php echo $userVote && $userVote->getVote() === 'Abstain' ? 'selected' : ''; ?>>Abstain</option>
+                                            </select>
+                                            <button type="submit" name="cast_vote">
+                                                <?php echo $userVote ? 'Update Vote' : 'Submit Vote'; ?>
+                                            </button>
+                                        </form>
+                                    </div>
+                                <?php elseif (in_array($bill->getStatus(), ['Passed', 'Rejected'])): ?>
+                                    <div class="final-results">
+                                        <h4>Final Results:</h4>
+                                        <p><strong>Status: <?php echo htmlspecialchars($bill->getStatus()); ?></strong></p>
+                                        <p>Votes For: <?php echo $voteCounts['For']; ?></p>
+                                        <p>Votes Against: <?php echo $voteCounts['Against']; ?></p>
+                                        <p>Abstentions: <?php echo $voteCounts['Abstain']; ?></p>
+                                        <p>Total Votes: <?php echo $totalVotes; ?></p>
+                                    </div>
+                                <?php else: ?>
+                                    <p>Voting has not started yet.</p>
+                                <?php endif; ?>
+                            </td>
+                            <td>
+                                <?php if ($bill->getStatus() === 'Draft'): ?>
+                                    <form method="post">
+                                        <input type="hidden" name="bill_id" value="<?php echo htmlspecialchars($bill->getId()); ?>">
+                                        <button type="submit" name="submit_for_review" class="review-button">Submit for Review</button>
+                                    </form>
+                                <?php else: ?>
+                                    <p class="status-message">
+                                        <?php
+                                        switch($bill->getStatus()) {
+                                            case 'Under Review':
+                                                echo 'Currently under review';
+                                                break;
+                                            case 'Review Complete':
+                                                echo 'Review completed';
+                                                break;
+                                            case 'Voting Started':
+                                                echo 'Voting in progress';
+                                                break;
+                                            case 'Passed':
+                                            case 'Rejected':
+                                                echo 'Final status: ' . $bill->getStatus();
+                                                break;
+                                        }
+                                        ?>
+                                    </p>
+                                <?php endif; ?>
+                            </td>
+                        </tr>
+                    <?php endforeach; ?>
+                </table>
+            </div>
+        <?php else: ?>
+            <p>You have not created any bills yet.</p>
+        <?php endif; ?>
+    </div>
 </body>
 </html>

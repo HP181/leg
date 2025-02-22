@@ -4,9 +4,9 @@ error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
 require_once "../config.php";
-require_once "../repositories/BillRepository.php";
-require_once "../repositories/AmendmentRepository.php";
-require_once "../repositories/VoteRepository.php";
+require_once "../controllers/BillController.php";
+require_once "../controllers/AmendmentController.php";
+require_once "../controllers/VoteController.php";
 
 // Ensure user is logged in
 if (!isset($_SESSION['user'])) {
@@ -14,9 +14,10 @@ if (!isset($_SESSION['user'])) {
     exit();
 }
 
-$billRepository = new BillRepository();
-$amendmentRepository = new AmendmentRepository();
-$voteRepository = new VoteRepository();
+// Initialize controllers
+$billController = new BillController();
+$amendmentController = new AmendmentController();
+$voteController = new VoteController();
 
 // Initialize view type and filters
 $viewType = $_GET['view_type'] ?? 'bills';
@@ -25,104 +26,99 @@ $filterStatus = $_GET['status'] ?? '';
 $voteType = $_GET['vote_type'] ?? '';
 $billFilter = $_GET['bill_filter'] ?? '';
 
-// Get all bills for filters
-$bills = $billRepository->getAllBills();
-$statuses = ['Draft', 'Under Review', 'Review Complete', 'Voting Started', 'Passed', 'Rejected'];
-$voteTypes = ['For', 'Against', 'Abstain'];
+try {
+    // Get all bills for filters
+    $bills = $billController->getBillsByAuthor('%'); // Get all bills
+    $statuses = ['Draft', 'Under Review', 'Review Complete', 'Voting Started', 'Passed', 'Rejected'];
+    $voteTypes = ['For', 'Against', 'Abstain'];
 
-// Handle export requests
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['export'])) {
-    $type = $_POST['type'];
-    $format = $_POST['format'];
-    $exportStatus = $_POST['status'] ?? '';
-    $exportVoteType = $_POST['vote_type'] ?? '';
-    $exportBillFilter = $_POST['bill_filter'] ?? '';
+    // Handle export requests
+    if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['export'])) {
+        $type = $_POST['type'];
+        $format = $_POST['format'];
+        $exportStatus = $_POST['status'] ?? '';
+        $exportVoteType = $_POST['vote_type'] ?? '';
+        $exportBillFilter = $_POST['bill_filter'] ?? '';
 
-    // Get data based on type and filters
-    $data = [];
-    switch ($type) {
-        case 'bills':
-            $data = $billRepository->getAllBills();
-            if ($exportStatus) {
-                $data = array_filter($data, fn($bill) => $bill['status'] === $exportStatus);
-            }
-            break;
-
-        case 'votes':
-            $votes = $voteRepository->getAllVotes();
-            if ($exportVoteType) {
-                $filteredVotes = [];
-                foreach ($votes as $billId => $billVotes) {
-                    foreach ($billVotes as $user => $vote) {
-                        if ($vote === $exportVoteType) {
-                            if (!isset($filteredVotes[$billId])) {
-                                $filteredVotes[$billId] = [];
-                            }
-                            $filteredVotes[$billId][$user] = $vote;
-                        }
-                    }
-                }
-                $data = $filteredVotes;
-            } else {
-                $data = $votes;
-            }
-            
-            // Add bill information to votes
-            $exportData = [];
-            foreach ($data as $billId => $billVotes) {
-                $bill = $billRepository->getBillById($billId);
-                foreach ($billVotes as $user => $vote) {
-                    $exportData[] = [
-                        'bill_id' => $billId,
-                        'bill_title' => $bill ? $bill['title'] : 'Unknown Bill',
-                        'user' => $user,
-                        'vote' => $vote
+        // Get data based on type and filters
+        $data = [];
+        switch ($type) {
+            case 'bills':
+                $bills = $exportStatus ? 
+                    $billController->getBillsByStatus($exportStatus) : 
+                    $billController->getBillsByAuthor('%');
+                
+                $data = array_map(function($bill) {
+                    return [
+                        'id' => $bill->getId(),
+                        'title' => $bill->getTitle(),
+                        'description' => $bill->getDescription(),
+                        'author' => $bill->getAuthor(),
+                        'status' => $bill->getStatus(),
+                        'created_at' => $bill->getCreatedAt()
                     ];
-                }
-            }
-            $data = $exportData;
-            break;
+                }, $bills);
+                break;
 
-        case 'amendments':
-            $amendments = $amendmentRepository->getAllAmendments();
-            if ($exportBillFilter) {
-                $amendments = array_filter($amendments, fn($amendment) => 
-                    $amendment['bill_id'] === $exportBillFilter
-                );
-            }
-            
-            // Add bill titles to amendments
-            $exportData = [];
-            foreach ($amendments as $amendment) {
-                $bill = $billRepository->getBillById($amendment['bill_id']);
-                $exportData[] = array_merge($amendment, [
-                    'bill_title' => $bill ? $bill['title'] : 'Unknown Bill'
-                ]);
-            }
-            $data = $exportData;
-            break;
-    }
+            case 'votes':
+                $votes = $exportVoteType ? 
+                    $voteController->getVotesByType($exportVoteType) : 
+                    $voteController->getVotes();
+                
+                $data = array_map(function($vote) use ($billController) {
+                    $bill = $billController->getBillById($vote->getBillId());
+                    return [
+                        'bill_id' => $vote->getBillId(),
+                        'bill_title' => $bill ? $bill->getTitle() : 'Unknown Bill',
+                        'username' => $vote->getUsername(),
+                        'vote' => $vote->getVote(),
+                        'voted_at' => $vote->getVotedAt()
+                    ];
+                }, $votes);
+                break;
 
-    // Export based on format
-    $filename = $type . '_export_' . date('Y-m-d_His');
-    switch ($format) {
-        case 'json':
-            header('Content-Type: application/json');
-            header('Content-Disposition: attachment; filename="' . $filename . '.json"');
-            echo json_encode($data, JSON_PRETTY_PRINT);
-            exit;
-            
-        case 'xml':
-            header('Content-Type: application/xml');
-            header('Content-Disposition: attachment; filename="' . $filename . '.xml"');
-            $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><data/>');
-            array_to_xml($data, $xml);
-            echo $xml->asXML();
-            exit;
+            case 'amendments':
+                $amendments = $exportBillFilter ? 
+                    $amendmentController->getByBillId($exportBillFilter) : 
+                    $amendmentController->getAll();
+                
+                $data = array_map(function($amendment) use ($billController) {
+                    $bill = $billController->getBillById($amendment->getBillId());
+                    return [
+                        'bill_id' => $amendment->getBillId(),
+                        'bill_title' => $bill ? $bill->getTitle() : 'Unknown Bill',
+                        'reviewer' => $amendment->getReviewer(),
+                        'amendment_text' => $amendment->getAmendmentText(),
+                        'comments' => $amendment->getComments(),
+                        'created_at' => $amendment->getCreatedAt()
+                    ];
+                }, $amendments);
+                break;
+        }
+
+        // Export based on format
+        $filename = $type . '_export_' . date('Y-m-d_His');
+        switch ($format) {
+            case 'json':
+                header('Content-Type: application/json');
+                header('Content-Disposition: attachment; filename="' . $filename . '.json"');
+                echo json_encode($data, JSON_PRETTY_PRINT);
+                exit;
+                
+            case 'xml':
+                header('Content-Type: application/xml');
+                header('Content-Disposition: attachment; filename="' . $filename . '.xml"');
+                $xml = new SimpleXMLElement('<?xml version="1.0" encoding="UTF-8"?><data/>');
+                array_to_xml($data, $xml);
+                echo $xml->asXML();
+                exit;
+        }
     }
+} catch (Exception $e) {
+    $_SESSION['error'] = $e->getMessage();
 }
 
-// Helper function to convert array to XML
+// Helper function to convert array to XML (remains the same)
 function array_to_xml($array, &$xml) {
     foreach ($array as $key => $value) {
         if (is_array($value)) {
@@ -281,14 +277,14 @@ function array_to_xml($array, &$xml) {
                 </span>
 
                 <span id="amendmentExportFilters" class="dynamic-filter">
-                    <select name="bill_filter">
-                        <option value="">All Bills</option>
-                        <?php foreach ($bills as $billId => $bill): ?>
-                            <option value="<?php echo htmlspecialchars($billId); ?>">
-                                <?php echo htmlspecialchars($bill['title']); ?>
-                            </option>
-                        <?php endforeach; ?>
-                    </select>
+                <select name="bill_filter">
+                    <option value="">All Bills</option>
+                    <?php foreach ($bills as $bill): ?>
+                        <option value="<?php echo htmlspecialchars($bill->getId()); ?>">
+                            <?php echo htmlspecialchars($bill->getTitle()); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
                 </span>
 
                 <button type="submit" name="export">Export</button>
